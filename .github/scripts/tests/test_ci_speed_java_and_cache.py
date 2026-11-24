@@ -489,6 +489,7 @@ MAVEN_JOBS = [
     "openmetadata-service-unit-tests",
     "k8s_operator-unit-tests",
     "docker-image-smoke-test",
+    "maven-sonarcloud-ci",
 ]
 
 
@@ -510,26 +511,69 @@ def test_unit_test_jobs_still_restore_maven_on_prs_and_save_on_main(job: str) ->
     assert steps[save]["if"].replace(" ", "").startswith("github.event_name=='push'")
 
 
-@pytest.mark.parametrize(
-    "workflow",
-    [
+def test_unified_backend_workflow_builds_it_runtime_once_and_gates_on_unit_tests() -> (
+    None
+):
+    for retired in (
+        "maven-sonar-build.yml",
         "integration-tests-mysql-elasticsearch.yml",
         "integration-tests-postgres-opensearch.yml",
         "integration-tests-postgres-elasticsearch-redis.yml",
-    ],
-)
-def test_integration_test_workflows_hydrate_maven_read_only(workflow: str) -> None:
-    jobs = load(WORKFLOWS / workflow)["jobs"]
-    for job_name in ("integration-test-build", "integration-test-lanes"):
-        steps = jobs[job_name]["steps"]
-        assert any(
-            s.get("uses") == "./.github/actions/hydrate-maven-cache" for s in steps
-        ), f"{workflow}:{job_name} must use hydrate-maven-cache"
-        assert not any(
-            s.get("uses", "").startswith("actions/cache@")
-            and (s.get("with") or {}).get("path") == "~/.m2"
-            for s in steps
-        ), f"{workflow}:{job_name} must not save ~/.m2 on ephemeral merge_group refs"
+    ):
+        assert not (WORKFLOWS / retired).exists(), f"{retired} should be consolidated"
+
+    backend = load(WORKFLOWS / "openmetadata-service-unit-tests.yml")
+    jobs = backend["jobs"]
+
+    # SonarCloud stays off PR and merge_group inside the unified backend workflow.
+    sonar_if = jobs["maven-sonarcloud-ci"]["if"]
+    assert excludes_pull_request(sonar_if)
+    assert "github.event_name != 'merge_group'" in sonar_if
+
+    # Integration-test build runs once and shares its artifact across all 3 profiles.
+    build_steps = jobs["integration-test-build"]["steps"]
+    assert any(
+        s.get("uses") == "./.github/actions/hydrate-maven-cache" for s in build_steps
+    )
+    assert not any(
+        s.get("uses", "").startswith("actions/cache@")
+        and (s.get("with") or {}).get("path") == "~/.m2"
+        for s in build_steps
+    )
+
+    reusable_steps = load(WORKFLOWS / "java-integration-lanes-reusable.yml")["jobs"][
+        "integration-test-lanes"
+    ]["steps"]
+    assert any(
+        s.get("uses") == "./.github/actions/hydrate-maven-cache" for s in reusable_steps
+    )
+    assert not any(
+        s.get("uses", "").startswith("actions/cache@")
+        and (s.get("with") or {}).get("path") == "~/.m2"
+        for s in reusable_steps
+    )
+
+    for profile_job in (
+        "it-mysql-elasticsearch",
+        "it-postgres-opensearch",
+        "it-postgres-elasticsearch-redis",
+    ):
+        job = jobs[profile_job]
+        assert job["uses"] == "./.github/workflows/java-integration-lanes-reusable.yml"
+        assert "openmetadata-service-unit-tests" in job["needs"]
+        assert "integration-test-build" in job["needs"]
+        assert excludes_pull_request(job["if"])
+        assert job["with"]["artifact_name"] == "java-it-build-${{ github.run_id }}"
+
+    # Required status check job names stay top-level so merge-rules matches them.
+    for required_check in (
+        "openmetadata-service-unit-tests",
+        "openmetadata-service-unit-tests-status",
+        "integration-tests-mysql-elasticsearch",
+        "integration-tests-postgres-opensearch",
+        "integration-tests-postgres-elasticsearch-redis",
+    ):
+        assert required_check in jobs
 
 
 # ---------------------------------------------------------------------------
@@ -616,11 +660,8 @@ def test_ghcr_cache_pulls_authenticate_with_github_token() -> None:
 
     for wf in (
         "openmetadata-service-unit-tests.yml",
-        "maven-sonar-build.yml",
+        "java-integration-lanes-reusable.yml",
         "py-tests.yml",
-        "integration-tests-mysql-elasticsearch.yml",
-        "integration-tests-postgres-opensearch.yml",
-        "integration-tests-postgres-elasticsearch-redis.yml",
     ):
         perms = load(WORKFLOWS / wf).get("permissions") or {}
         assert perms.get("packages") == "read", f"{wf} needs packages: read"
