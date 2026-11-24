@@ -506,12 +506,17 @@ jobs:
 
   # Stage 2: All three Java IT profiles fan out in parallel from the single
   # `java-it-build` artifact ONLY after Stage 1 checkstyle + unit tests pass
-  # (prevents burning ~355 runner-min of IT lanes on broken merge-queue entries).
+  # (or are skipped when only IT-only paths like docker/rdf-store changed).
+  # `!cancelled()` disables GitHub's implicit `success()`, which would otherwise
+  # skip Stage 2 whenever `openmetadata-service-unit-tests` is legitimately skipped
+  # (ADR:2026-11-24-backend-ci-gates-integration-lanes-behind-unit-tests-and-builds-once).
   it-mysql-elasticsearch:
     needs: [changes, openmetadata-service-unit-tests, integration-test-build]
     if: >-
+      !cancelled() &&
       github.event_name != 'pull_request' &&
       github.event_name != 'schedule' &&
+      needs.changes.result == 'success' &&
       (needs.changes.outputs.backend_it == 'true' || needs.changes.outputs.backend_it_rdf == 'true') &&
       (needs.openmetadata-service-unit-tests.result == 'success' || needs.openmetadata-service-unit-tests.result == 'skipped') &&
       needs.integration-test-build.result == 'success'
@@ -529,8 +534,10 @@ jobs:
   it-postgres-opensearch:
     needs: [changes, openmetadata-service-unit-tests, integration-test-build]
     if: >-
+      !cancelled() &&
       github.event_name != 'pull_request' &&
       github.event_name != 'schedule' &&
+      needs.changes.result == 'success' &&
       (needs.changes.outputs.backend_it == 'true' || needs.changes.outputs.backend_it_rdf == 'true') &&
       (needs.openmetadata-service-unit-tests.result == 'success' || needs.openmetadata-service-unit-tests.result == 'skipped') &&
       needs.integration-test-build.result == 'success'
@@ -550,8 +557,10 @@ jobs:
   it-postgres-elasticsearch-redis:
     needs: [changes, openmetadata-service-unit-tests, integration-test-build]
     if: >-
+      !cancelled() &&
       github.event_name != 'pull_request' &&
       github.event_name != 'schedule' &&
+      needs.changes.result == 'success' &&
       needs.changes.outputs.backend_it == 'true' &&
       (needs.openmetadata-service-unit-tests.result == 'success' || needs.openmetadata-service-unit-tests.result == 'skipped') &&
       needs.integration-test-build.result == 'success'

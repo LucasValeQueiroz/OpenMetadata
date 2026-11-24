@@ -563,6 +563,10 @@ def test_unified_backend_workflow_builds_it_runtime_once_and_gates_on_unit_tests
         assert "openmetadata-service-unit-tests" in job["needs"]
         assert "integration-test-build" in job["needs"]
         assert excludes_pull_request(job["if"])
+        # `!cancelled()` overrides GitHub's implicit `success()`, so IT-only paths
+        # (where unit tests are legitimately skipped) still run Stage 2.
+        assert "!cancelled()" in job["if"]
+        assert "needs.changes.result == 'success'" in job["if"]
         assert job["with"]["artifact_name"] == "java-it-build-${{ github.run_id }}"
 
     # Required status check job names stay top-level so merge-rules matches them.
