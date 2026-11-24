@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
   pull-requests: read
 
 concurrency:

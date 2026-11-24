@@ -596,6 +596,44 @@ def test_java_checkstyle_is_unified_fail_fast_in_backend_job() -> None:
     assert "steps.checkstyle.outcome == 'success'" in steps[unit_tests]["if"]
 
 
+def test_ghcr_cache_pulls_authenticate_with_github_token() -> None:
+    # Newly published GHCR packages default to private until an admin makes them
+    # public, so every GHCR cache pull must authenticate with GITHUB_TOKEN
+    # (ADR:2026-11-24-ci-caches-live-in-ghcr-with-actions-cache-fallback).
+    hydrate = load(ROOT / ".github/actions/hydrate-maven-cache/action.yml")
+    ghcr_step = next(
+        s for s in hydrate["runs"]["steps"] if s.get("id") == "ghcr"
+    )
+    assert "github.token" in ghcr_step["env"]["GHCR_TOKEN"]
+    assert "docker login ghcr.io" in ghcr_step["run"]
+
+    pw_steps = load(WORKFLOWS / "playwright-e2e-reusable.yml")["jobs"][
+        "prepare-ingestion-image"
+    ]["steps"]
+    pw_ghcr = next(s for s in pw_steps if s.get("id") == "ghcr-ingestion")
+    assert "GITHUB_TOKEN" in pw_ghcr["env"]["GHCR_TOKEN"]
+    assert "docker login ghcr.io" in pw_ghcr["run"]
+
+    for wf in (
+        "openmetadata-service-unit-tests.yml",
+        "maven-sonar-build.yml",
+        "py-tests.yml",
+        "integration-tests-mysql-elasticsearch.yml",
+        "integration-tests-postgres-opensearch.yml",
+        "integration-tests-postgres-elasticsearch-redis.yml",
+    ):
+        perms = load(WORKFLOWS / wf).get("permissions") or {}
+        assert perms.get("packages") == "read", f"{wf} needs packages: read"
+
+    for wf in (
+        "playwright-postgresql-e2e.yml",
+        "postgresql-nightly-e2e.yml",
+        "mysql-nightly-e2e.yml",
+    ):
+        perms = load(WORKFLOWS / wf)["jobs"]["playwright"].get("permissions") or {}
+        assert perms.get("packages") == "read", f"{wf}:playwright needs packages: read"
+
+
 # ---------------------------------------------------------------------------
 # cache-ui-dist: restore-only on PRs, still signals a hit either way.
 # ---------------------------------------------------------------------------

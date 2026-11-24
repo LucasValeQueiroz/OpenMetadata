@@ -1353,17 +1353,23 @@ jobs:
       - name: Initialize ingestion cache path
         run: echo "INGESTION_CACHE_DIR=$RUNNER_TEMP/playwright-ingestion-cache" >> "$GITHUB_ENV"
 
-      # Primary store: GHCR (outside GitHub's 10 GB Actions cache cap, freeing ~2.6 GB).
+      # Primary store: GHCR (outside GitHub's 10 GB Actions cache cap, freeing ~2.6 GB;
+      # see ADR:2026-11-24-ci-caches-live-in-ghcr-with-actions-cache-fallback).
       - name: Restore ingestion image from GHCR
         id: ghcr-ingestion
         env:
           REPO_OWNER: ${{ github.repository_owner }}
           EXPECTED_FINGERPRINT: ${{ needs.cache-keys.outputs.ingestion }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
           owner=$(printf '%s' "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
           ghcr_ref="ghcr.io/${owner}/ci-playwright-ingestion:${EXPECTED_FINGERPRINT}"
           echo "ghcr_ref=$ghcr_ref" >> "$GITHUB_OUTPUT"
+          if [[ -n "$GHCR_TOKEN" ]]; then
+            printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin >/dev/null 2>&1 || true
+          fi
           if docker pull --quiet "$ghcr_ref" >/dev/null 2>&1; then
             .github/scripts/pack_playwright_ingestion_image.sh \
               "$ghcr_ref" \

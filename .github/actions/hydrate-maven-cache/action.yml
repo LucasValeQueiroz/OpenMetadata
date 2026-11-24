@@ -16,7 +16,8 @@ description: >
   (ghcr.io/<owner>/ci-m2-cache:main) which lives outside GitHub's 10 GB Actions
   cache budget and never gets LRU-evicted, and finally falls back to a prefix
   Actions cache restore. Never saves a cache, so it is safe on pull_request and
-  merge_group (ADR:2026-11-11-pull-request-jobs-restore-caches-but-never-save-them).
+  merge_group (ADR:2026-11-11-pull-request-jobs-restore-caches-but-never-save-them,
+  ADR:2026-11-24-ci-caches-live-in-ghcr-with-actions-cache-fallback).
 
 inputs:
   ghcr-image:
@@ -24,7 +25,7 @@ inputs:
     required: false
     default: ""
   token:
-    description: Optional registry token for private forks (public repos pull anonymously)
+    description: Optional registry token override (defaults to github.token for same-repo GHCR read)
     required: false
     default: ""
 
@@ -56,7 +57,7 @@ runs:
       env:
         IMAGE_OVERRIDE: ${{ inputs.ghcr-image }}
         REPO_OWNER: ${{ github.repository_owner }}
-        GHCR_TOKEN: ${{ inputs.token }}
+        GHCR_TOKEN: ${{ inputs.token || github.token }}
         GHCR_ACTOR: ${{ github.actor }}
       run: |
         set -euo pipefail

@@ -11,7 +11,8 @@
 
 # Publishes pre-baked CI images to GHCR so PR and merge-queue jobs hydrate ~/.m2
 # without downloading Maven Central dependencies or consuming the repo's 10 GB
-# GitHub Actions cache budget.
+# GitHub Actions cache budget
+# (ADR:2026-11-24-ci-caches-live-in-ghcr-with-actions-cache-fallback).
 #
 # Never runs on pull_request (requires packages: write).
 name: Publish CI Builder Images

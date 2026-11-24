@@ -34,6 +34,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: maven-sonar-build-${{ github.ref }}
