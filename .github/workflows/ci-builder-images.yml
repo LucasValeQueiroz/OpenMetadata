@@ -1,0 +1,96 @@
+#  Copyright 2026 Collate
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#  http://www.apache.org/licenses/LICENSE-2.0
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+
+# Publishes pre-baked CI images to GHCR so PR and merge-queue jobs hydrate ~/.m2
+# without downloading Maven Central dependencies or consuming the repo's 10 GB
+# GitHub Actions cache budget.
+#
+# Never runs on pull_request (requires packages: write).
+name: Publish CI Builder Images
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "**/pom.xml"
+      - "docker/ci/Dockerfile.m2-cache"
+      - ".github/workflows/ci-builder-images.yml"
+  schedule:
+    # Daily refresh keeps registry layers warm and picks up base image security updates.
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ci-builder-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    name: Build and Push CI Maven & Java Builder Images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Compute image metadata
+        id: meta
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+          POM_HASH: ${{ hashFiles('**/pom.xml') }}
+        run: |
+          owner=$(printf '%s' "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
+          short_hash="${POM_HASH:0:12}"
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+          echo "short_hash=$short_hash" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ci-m2-cache image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/ci/Dockerfile.m2-cache
+          target: m2-cache
+          push: true
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.owner }}/ci-m2-cache:main
+            ghcr.io/${{ steps.meta.outputs.owner }}/ci-m2-cache:${{ steps.meta.outputs.short_hash }}
+          cache-from: type=registry,ref=ghcr.io/${{ steps.meta.outputs.owner }}/ci-m2-cache:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ steps.meta.outputs.owner }}/ci-m2-cache:buildcache,mode=max
+
+      - name: Build and push ci-java-builder image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/ci/Dockerfile.m2-cache
+          target: java-builder
+          push: true
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.owner }}/ci-java-builder:main
+            ghcr.io/${{ steps.meta.outputs.owner }}/ci-java-builder:${{ steps.meta.outputs.short_hash }}
+          cache-from: type=registry,ref=ghcr.io/${{ steps.meta.outputs.owner }}/ci-m2-cache:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ steps.meta.outputs.owner }}/ci-m2-cache:buildcache,mode=max

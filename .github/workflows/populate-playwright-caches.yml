@@ -225,6 +225,7 @@ jobs:
     permissions:
       actions: read
       contents: read
+      packages: write
       pull-requests: read
       checks: read
     with:

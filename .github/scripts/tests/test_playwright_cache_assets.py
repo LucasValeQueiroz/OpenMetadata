@@ -522,10 +522,16 @@ def test_no_cache_is_saved_from_an_ephemeral_merge_queue_ref() -> None:
     guard = "github.event_name != 'merge_group'"
 
     writers = workflow.count("uses: actions/cache/save@")
-    assert writers == 5, f"cache writer count changed to {writers}; guard each one"
+    assert writers == 4, f"cache writer count changed to {writers}; guard each one"
     cache_steps = [step for step in workflow.split("      - name:") if "uses: actions/cache/save@" in step]
     assert len(cache_steps) == writers
     assert all(guard in step for step in cache_steps)
+
+    # Ingestion image is published to GHCR instead of Actions cache and must also stay off merge_group/PRs.
+    ghcr_push_steps = [step for step in workflow.split("      - name:") if "docker push" in step]
+    assert len(ghcr_push_steps) == 1
+    assert guard in ghcr_push_steps[0]
+    assert "github.event_name != 'pull_request'" in ghcr_push_steps[0]
 
     # cache-ui-dist is the documented exception: it wraps `actions/cache`, whose
     # save is a post-step, so a step-level `if:` would suppress the restore too

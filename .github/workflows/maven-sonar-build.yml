@@ -9,12 +9,18 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+# Runs static analysis on main pushes, nightly, and manual dispatch — removed from
+# pull_request to eliminate a redundant 6-minute full Maven build per PR and its
+# PR-scoped ~/.m2 cache saves (ADR:2026-11-11-pull-request-jobs-restore-caches-but-never-save-them).
 name: Maven SonarCloud CI
 
 on:
   workflow_dispatch:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "0 4 * * *"
+  push:
+    branches:
+      - main
     paths:
       - "openmetadata-service/**"
       - "openmetadata-spec/src/main/resources/json/schema/**"
@@ -30,26 +36,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: maven-sonar-build-${{ github.event.pull_request.number || github.run_id }}
+  group: maven-sonar-build-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   maven-sonarcloud-ci:
     runs-on: ubuntu-latest
-    if: ${{ !github.event.pull_request.draft }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-      - name: Restore Maven dependencies
+      - name: Hydrate Maven dependencies
         id: maven-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            ${{ runner.os }}-maven-
+        uses: ./.github/actions/hydrate-maven-cache
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -70,10 +69,10 @@ jobs:
       - name: Build with Maven
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: mvn -Pstatic-code-analysis clean verify -DskipTests -am
+        run: mvn -B -T 1C -Pstatic-code-analysis clean verify -DskipTests -am
 
       - name: Save Maven dependencies
-        if: steps.maven-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && steps.maven-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@v6
         with:

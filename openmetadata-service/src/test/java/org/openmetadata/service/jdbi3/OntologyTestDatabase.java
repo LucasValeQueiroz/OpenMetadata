@@ -15,8 +15,11 @@ package org.openmetadata.service.jdbi3;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
@@ -32,6 +35,9 @@ import org.testcontainers.containers.wait.strategy.Wait;
 final class OntologyTestDatabase {
   private static final String DATABASE = "ontology_entities";
   static final String PASSWORD = "ontology-storage-test";
+  private static final AtomicLong DATABASE_SEQUENCE = new AtomicLong();
+  private static final Map<ConnectionType, GenericContainer<?>> SHARED_CONTAINERS =
+      new EnumMap<>(ConnectionType.class);
 
   private OntologyTestDatabase() {}
 
@@ -44,12 +50,38 @@ final class OntologyTestDatabase {
       }
       return;
     }
-    try (GenericContainer<?> database = database(dialect)) {
-      database.start();
-      try (Handle handle = connect(database, dialect)) {
-        assertion.accept(handle);
-      }
+    // Reuse one container per dialect across the JVM and isolate each invocation in its own
+    // ephemeral database so ontology tests avoid ~100+ cold Docker startups per surefire run.
+    GenericContainer<?> container = sharedContainer(dialect);
+    String dbName = "ont_test_" + DATABASE_SEQUENCE.incrementAndGet();
+    createDatabase(container, dialect, dbName);
+    try (Handle handle = connect(container, dialect, dbName)) {
+      assertion.accept(handle);
+    } finally {
+      dropDatabase(container, dialect, dbName);
     }
+  }
+
+  private static synchronized GenericContainer<?> sharedContainer(ConnectionType dialect) {
+    GenericContainer<?> existing = SHARED_CONTAINERS.get(dialect);
+    if (existing != null && existing.isRunning()) {
+      return existing;
+    }
+    GenericContainer<?> started = database(dialect);
+    started.start();
+    SHARED_CONTAINERS.put(dialect, started);
+    Runtime.getRuntime()
+        .addShutdownHook(
+            new Thread(
+                () -> {
+                  try {
+                    started.stop();
+                  } catch (RuntimeException ignored) {
+                    // Best-effort cleanup on JVM exit; Testcontainers Ryuk also reaps it.
+                  }
+                },
+                "ontology-test-db-shutdown-" + dialect.name().toLowerCase(Locale.ROOT)));
+    return started;
   }
 
   private static GenericContainer<?> database(ConnectionType dialect) {
@@ -68,7 +100,30 @@ final class OntologyTestDatabase {
                 Wait.forLogMessage(".*database system is ready to accept connections.*\\n", 2));
   }
 
-  private static Handle connect(GenericContainer<?> database, ConnectionType dialect) {
+  private static void createDatabase(
+      GenericContainer<?> container, ConnectionType dialect, String dbName) {
+    String adminDb = dialect == ConnectionType.MYSQL ? DATABASE : "postgres";
+    try (Handle admin = connect(container, dialect, adminDb)) {
+      admin.execute("CREATE DATABASE " + dbName);
+    }
+  }
+
+  private static void dropDatabase(
+      GenericContainer<?> container, ConnectionType dialect, String dbName) {
+    String adminDb = dialect == ConnectionType.MYSQL ? DATABASE : "postgres";
+    try (Handle admin = connect(container, dialect, adminDb)) {
+      if (dialect == ConnectionType.POSTGRES) {
+        admin.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
+                + " WHERE datname = ? AND pid <> pg_backend_pid()",
+            dbName);
+      }
+      admin.execute("DROP DATABASE IF EXISTS " + dbName);
+    }
+  }
+
+  private static Handle connect(
+      GenericContainer<?> database, ConnectionType dialect, String dbName) {
     boolean mysql = dialect == ConnectionType.MYSQL;
     String url =
         "jdbc:%s://%s:%d/%s%s"
@@ -76,7 +131,7 @@ final class OntologyTestDatabase {
                 mysql ? "mysql" : "postgresql",
                 database.getHost(),
                 database.getMappedPort(mysql ? 3306 : 5432),
-                DATABASE,
+                dbName,
                 mysql
                     ? "?allowPublicKeyRetrieval=true&useSSL=false&connectTimeout=5000&socketTimeout=30000"
                     : "");
